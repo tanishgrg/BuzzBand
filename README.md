@@ -2,7 +2,7 @@
 
 Welcome to the official repository for the STEM Connect Hackathon Fall 2025 starter templates! This repository provides a foundation for your hackathon projects, allowing you to jumpstart development and focus on building innovative solutions.
 
-[![Hackathon Devpost](https://img.shields.io/badge/Devpost-STEM_Connect_2025-blue)](https://stem-connect-2025.devpost.com/)
+[![Hackathon Devpost](https://img.shields.io/badge/Devpost-STEM_Connect_2025-blue)](https://stem-connect-fall2025.devpost.com/)
 
 ## About the Hackathon
 
