@@ -68,7 +68,7 @@ List the technologies, frameworks, and APIs you used. This is a great way to sho
 
 - **Deployment:** `[e.g., Vercel, Netlify, Render]`
 
-## 챌 Challenges We Ran Into
+## Challenges We Ran Into
 
 <!--
 Every project has challenges! This is a great place to show your problem-solving skills.
