@@ -2,7 +2,7 @@
 EXAMPLE STRUCUTRE OF A PROJECT README. YOU DON'T NEED TO USE THIS ONE FR FR
 -->
 
-# 🚀
+# 
 
 $$
 Your Project Name
@@ -23,7 +23,7 @@ Example: "An app that helps recent graduates find and manage side-hustles to bui
 
 `[A brief, one-sentence tagline for your project.]`
 
-## 💡 Inspiration
+## Inspiration
 
 <!--
 Tell us your story!
