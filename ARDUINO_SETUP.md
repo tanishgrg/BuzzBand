@@ -1,17 +1,16 @@
-# Arduino Vibration System Setup Guide
+# Arduino Piezo Buzzer System Setup Guide
 
 ## Hardware Requirements
 
 ### Arduino Components:
 - Arduino Uno (or compatible)
-- Vibration motor (3V-5V)
-- Resistor (220Ω)
+- Piezo buzzer (3V-5V)
 - Jumper wires
 - Breadboard (optional)
 
 ### Wiring:
 ```
-Arduino Pin 9 → Resistor → Vibration Motor → GND
+Arduino Pin 9 → Piezo Buzzer (+) → Piezo Buzzer (-) → GND
 Arduino Pin 13 → Built-in LED (for visual feedback)
 ```
 
@@ -38,7 +37,7 @@ pip install pyserial requests
 1. Open Arduino IDE Serial Monitor (Tools → Serial Monitor)
 2. Set baud rate to 9600
 3. Send commands: `NEARBY`, `APPROACH`, `STOP`, `IDLE`
-4. Watch the LED and feel the vibration patterns
+4. Watch the LED and listen to the beep patterns
 
 ### Test with Python:
 1. Connect Arduino via USB
@@ -46,12 +45,12 @@ pip install pyserial requests
 3. The system will automatically detect the Arduino
 4. Monitor the console for ETA updates and vibration commands
 
-## Vibration Patterns
+## Beep Patterns
 
-- **NEARBY**: Short-short-short (200ms on, 100ms off, 200ms on)
-- **APPROACH**: Medium-pause-medium (500ms on, 200ms off, 500ms on)  
-- **STOP**: Long-long-long (1000ms on, 300ms off, 1000ms on, 300ms off, 1000ms on)
-- **IDLE**: Stops all vibrations
+- **NEARBY**: Short-short-short (200ms on, 100ms off, 200ms on) at 800Hz
+- **APPROACH**: Medium-pause-medium (500ms on, 200ms off, 500ms on) at 600Hz
+- **STOP**: Long-long-long (1000ms on, 300ms off, 1000ms on, 300ms off, 1000ms on) at 400Hz
+- **IDLE**: Stops all beeps
 
 ## Troubleshooting
 
@@ -61,11 +60,12 @@ pip install pyserial requests
 - Install Arduino drivers if needed
 - Check Device Manager for COM port
 
-### No Vibration:
-- Check wiring (Pin 9 → Resistor → Motor → GND)
-- Test motor with 3V battery
-- Check if motor is working
+### No Sound:
+- Check wiring (Pin 9 → Piezo Buzzer (+) → Piezo Buzzer (-) → GND)
+- Test buzzer with 3V battery
+- Check if buzzer is working
 - Verify code uploaded successfully
+- Try different frequencies in the code
 
 ### Python Connection Issues:
 - Check COM port in Arduino IDE
@@ -75,10 +75,11 @@ pip install pyserial requests
 
 ## Customization
 
-### Change Vibration Patterns:
-Edit the pattern arrays in `arduino_vibration.ino`:
+### Change Beep Patterns:
+Edit the pattern arrays and frequencies in `arduino_vibration.ino`:
 ```cpp
 const int NEARBY_PATTERN[] = {200, 100, 200};  // milliseconds
+const int NEARBY_FREQ = 800;    // frequency in Hz
 ```
 
 ### Adjust Thresholds:
