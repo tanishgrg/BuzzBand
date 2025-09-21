@@ -21,24 +21,24 @@
 
 // Pin definitions
 const int BUZZER_PIN = 9;
-const int RED_LED_PIN = 10;    // Origin alerts
-const int GREEN_LED_PIN = 11;  // Destination alerts
+const int GREEN_LED_PIN = 10;   // Nearby threshold indicator
+const int RED_LED_PIN = 11;     // Stop threshold indicator
 const int BLUE_LED_PIN = 12;    // Status indicator
 
-// Alert patterns - More pronounced and attention-grabbing
-const int NEARBY_PATTERN[] = {300, 150, 300, 150, 300};      // Short-short-short-short-short
-const int APPROACH_PATTERN[] = {600, 200, 600, 200, 600};     // Medium-pause-medium-pause-medium
-const int STOP_PATTERN[] = {1000, 300, 1000, 300, 1000, 300, 1000};  // Long-long-long-long
+// Alert patterns - Extended duration and more noticeable
+const int NEARBY_PATTERN[] = {500, 200, 500, 200, 500, 200, 500};      // Extended short pattern
+const int APPROACH_PATTERN[] = {800, 300, 800, 300, 800, 300, 800};     // Extended medium pattern
+const int STOP_PATTERN[] = {1200, 400, 1200, 400, 1200, 400, 1200, 400, 1200};  // Extended long pattern
 
-// Frequencies for different alert levels - More pronounced
-const int NEARBY_FREQ = 1200;   // Higher pitch for attention
-const int APPROACH_FREQ = 1000; // Medium-high pitch
-const int STOP_FREQ = 800;      // Medium pitch (not too low)
+// Frequencies for different alert levels - More noticeable
+const int NEARBY_FREQ = 1500;   // Higher pitch for attention
+const int APPROACH_FREQ = 1300; // Medium-high pitch
+const int STOP_FREQ = 1000;     // Medium pitch (more noticeable)
 
-// Pattern lengths
-const int NEARBY_LENGTH = 5;     // 5 beeps for nearby
-const int APPROACH_LENGTH = 5;   // 5 beeps for approach
-const int STOP_LENGTH = 7;       // 7 beeps for stop
+// Pattern lengths - Extended for more noticeable alerts
+const int NEARBY_LENGTH = 7;     // 7 beeps for nearby (extended)
+const int APPROACH_LENGTH = 7;   // 7 beeps for approach (extended)
+const int STOP_LENGTH = 9;       // 9 beeps for stop (extended)
 
 // State variables
 bool isAlerting = false;
@@ -82,36 +82,33 @@ void loop() {
     handleCommand(command);
   }
   
-  // Handle alert pattern execution
-  if (isAlerting && currentPattern != nullptr) {
-    executeAlertPattern();
-  }
+  // Alert patterns are now self-executing, no need to call from loop
 }
 
 void handleCommand(String command) {
   if (command == "ORIGIN_NEARBY") {
-    startAlert(NEARBY_PATTERN, NEARBY_LENGTH, NEARBY_FREQ, RED_LED_PIN);
-    Serial.println("Origin nearby alert");
+    simpleAlert(GREEN_LED_PIN, NEARBY_FREQ, 3000);  // 3 seconds
+    Serial.println("Origin nearby alert - GREEN LED");
   }
   else if (command == "ORIGIN_APPROACH") {
-    startAlert(APPROACH_PATTERN, APPROACH_LENGTH, APPROACH_FREQ, RED_LED_PIN);
-    Serial.println("Origin approach alert");
+    simpleAlert(GREEN_LED_PIN, APPROACH_FREQ, 5000);  // 5 seconds
+    Serial.println("Origin approach alert - GREEN LED");
   }
   else if (command == "ORIGIN_STOP") {
-    startAlert(STOP_PATTERN, STOP_LENGTH, STOP_FREQ, RED_LED_PIN);
-    Serial.println("Origin stop alert");
+    simpleAlert(RED_LED_PIN, STOP_FREQ, 8000);  // 8 seconds
+    Serial.println("Origin stop alert - RED LED");
   }
   else if (command == "DEST_NEARBY") {
-    startAlert(NEARBY_PATTERN, NEARBY_LENGTH, NEARBY_FREQ, GREEN_LED_PIN);
-    Serial.println("Destination nearby alert");
+    simpleAlert(GREEN_LED_PIN, NEARBY_FREQ, 3000);  // 3 seconds
+    Serial.println("Destination nearby alert - GREEN LED");
   }
   else if (command == "DEST_APPROACH") {
-    startAlert(APPROACH_PATTERN, APPROACH_LENGTH, APPROACH_FREQ, GREEN_LED_PIN);
-    Serial.println("Destination approach alert");
+    simpleAlert(GREEN_LED_PIN, APPROACH_FREQ, 5000);  // 5 seconds
+    Serial.println("Destination approach alert - GREEN LED");
   }
   else if (command == "DEST_STOP") {
-    startAlert(STOP_PATTERN, STOP_LENGTH, STOP_FREQ, GREEN_LED_PIN);
-    Serial.println("Destination stop alert");
+    simpleAlert(RED_LED_PIN, STOP_FREQ, 8000);  // 8 seconds
+    Serial.println("Destination stop alert - RED LED");
   }
   else if (command == "IDLE") {
     stopAlert();
@@ -125,54 +122,64 @@ void handleCommand(String command) {
     statusUpdate();
     Serial.println("Status update alert");
   }
+  else if (command == "LED_STATUS_ORIGIN") {
+    ledStatusOrigin();
+    Serial.println("LED Status: Origin");
+  }
+  else if (command == "LED_STATUS_DEST") {
+    ledStatusDest();
+    Serial.println("LED Status: Destination");
+  }
+  else if (command == "LED_STATUS_NONE") {
+    ledStatusNone();
+    Serial.println("LED Status: None");
+  }
   else {
     Serial.println("Unknown command: " + command);
   }
 }
 
-void startAlert(const int* pattern, int length, int frequency, int ledPin) {
-  currentPattern = pattern;
-  currentPatternLength = length;
-  currentPatternIndex = 0;
-  currentFrequency = frequency;
-  currentLEDPin = ledPin;
-  isAlerting = true;
-  alertStartTime = millis();
+void simpleAlert(int ledPin, int frequency, int duration) {
+  // Simple method: turn on LED and buzzer for specified duration
+  digitalWrite(ledPin, HIGH);
+  digitalWrite(BLUE_LED_PIN, HIGH);
+  tone(BUZZER_PIN, frequency, duration);
+  delay(duration);
+  
+  // Turn off everything
+  digitalWrite(ledPin, LOW);
+  digitalWrite(BLUE_LED_PIN, LOW);
+  noTone(BUZZER_PIN);
 }
 
-void executeAlertPattern() {
-  unsigned long currentTime = millis();
-  unsigned long elapsed = currentTime - alertStartTime;
+void startAlert(const int* pattern, int length, int frequency, int ledPin) {
+  // Stop any current alert
+  stopAlert();
   
-  // Calculate cumulative time for current pattern step
-  unsigned long cumulativeTime = 0;
-  for (int i = 0; i <= currentPatternIndex; i++) {
-    cumulativeTime += currentPattern[i];
-  }
+  // Simple direct execution method
+  currentLEDPin = ledPin;
   
-  if (elapsed >= cumulativeTime) {
-    // Move to next step in pattern
-    currentPatternIndex++;
+  // Execute pattern directly with delays
+  for (int i = 0; i < length; i++) {
+    int stepDuration = pattern[i];
     
-    if (currentPatternIndex >= currentPatternLength) {
-      // Pattern complete
-      stopAlert();
-      return;
+    if (i % 2 == 0) {
+      // Beep step - turn on everything
+      tone(BUZZER_PIN, frequency, stepDuration);
+      digitalWrite(currentLEDPin, HIGH);
+      digitalWrite(BLUE_LED_PIN, HIGH);
+      delay(stepDuration);  // Wait for beep to complete
+    } else {
+      // Pause step - turn off buzzer, keep main LED on
+      noTone(BUZZER_PIN);
+      digitalWrite(currentLEDPin, HIGH);  // Keep main LED on
+      digitalWrite(BLUE_LED_PIN, LOW);     // Turn off status LED
+      delay(stepDuration);  // Wait for pause
     }
   }
   
-  // Determine if we should be alerting or not
-  bool shouldAlert = (currentPatternIndex % 2 == 0);
-  
-  if (shouldAlert) {
-    tone(BUZZER_PIN, currentFrequency);
-    digitalWrite(currentLEDPin, HIGH);
-    digitalWrite(BLUE_LED_PIN, HIGH);  // Status indicator
-  } else {
-    noTone(BUZZER_PIN);
-    digitalWrite(currentLEDPin, LOW);
-    digitalWrite(BLUE_LED_PIN, LOW);
-  }
+  // Pattern complete - turn off everything
+  stopAlert();
 }
 
 void stopAlert() {
@@ -187,60 +194,93 @@ void stopAlert() {
 
 void urgentAlert() {
   // Very pronounced urgent alert - impossible to miss
-  for (int i = 0; i < 5; i++) {
+  for (int i = 0; i < 8; i++) {  // Extended urgent alert
     // All LEDs on
     digitalWrite(RED_LED_PIN, HIGH);
     digitalWrite(GREEN_LED_PIN, HIGH);
     digitalWrite(BLUE_LED_PIN, HIGH);
     
-    // Very high pitch, long duration
-    tone(BUZZER_PIN, 2000, 400);
-    delay(500);
+    // Very high pitch, extended duration
+    tone(BUZZER_PIN, 2500, 600);  // Higher pitch, longer duration
+    delay(800);  // Extended LED on time
     
     // All LEDs off
     digitalWrite(RED_LED_PIN, LOW);
     digitalWrite(GREEN_LED_PIN, LOW);
     digitalWrite(BLUE_LED_PIN, LOW);
     noTone(BUZZER_PIN);
-    delay(200);
+    delay(300);  // Shorter pause for more urgent feel
   }
 }
 
 void statusUpdate() {
-  // Quick status update alert - short and informative
+  // More noticeable status update alert
   digitalWrite(BLUE_LED_PIN, HIGH);
-  tone(BUZZER_PIN, 800, 100);  // Short beep
-  delay(150);
+  tone(BUZZER_PIN, 1200, 200);  // Higher pitch, longer duration
+  delay(300);  // Extended LED on time
   digitalWrite(BLUE_LED_PIN, LOW);
   noTone(BUZZER_PIN);
+}
+
+void ledStatusOrigin() {
+  // Show origin status - green LED for nearby, red LED for stop
+  digitalWrite(GREEN_LED_PIN, HIGH);
+  digitalWrite(RED_LED_PIN, LOW);
+  digitalWrite(BLUE_LED_PIN, HIGH);  // Status indicator
+  delay(1000);  // Show for 1 second
+  digitalWrite(GREEN_LED_PIN, LOW);
+  digitalWrite(BLUE_LED_PIN, LOW);
+}
+
+void ledStatusDest() {
+  // Show destination status - green LED for nearby, red LED for stop
+  digitalWrite(GREEN_LED_PIN, HIGH);
+  digitalWrite(RED_LED_PIN, LOW);
+  digitalWrite(BLUE_LED_PIN, HIGH);  // Status indicator
+  delay(1000);  // Show for 1 second
+  digitalWrite(GREEN_LED_PIN, LOW);
+  digitalWrite(BLUE_LED_PIN, LOW);
+}
+
+void ledStatusNone() {
+  // No trains - turn off all LEDs
+  digitalWrite(GREEN_LED_PIN, LOW);
+  digitalWrite(RED_LED_PIN, LOW);
+  digitalWrite(BLUE_LED_PIN, LOW);
 }
 
 void startupSequence() {
   // More pronounced startup sequence
   Serial.println("Starting Transit Keychain...");
+  Serial.println("LED Configuration:");
+  Serial.println("  GREEN LED (Pin 10) - Nearby threshold");
+  Serial.println("  RED LED (Pin 11) - Stop threshold");
+  Serial.println("  BLUE LED (Pin 12) - Status indicator");
   
-  // Attention-grabbing startup sequence
-  for (int i = 0; i < 3; i++) {
-    // All LEDs on
-    digitalWrite(RED_LED_PIN, HIGH);
-    digitalWrite(GREEN_LED_PIN, HIGH);
-    digitalWrite(BLUE_LED_PIN, HIGH);
-    
-    // Pronounced buzzer sequence
-    tone(BUZZER_PIN, 1500, 200);  // High pitch
-    delay(300);
-    tone(BUZZER_PIN, 1000, 200);  // Medium pitch
-    delay(300);
-    tone(BUZZER_PIN, 800, 200);   // Lower pitch
-    delay(300);
-    
-    // All LEDs off
-    digitalWrite(RED_LED_PIN, LOW);
-    digitalWrite(GREEN_LED_PIN, LOW);
-    digitalWrite(BLUE_LED_PIN, LOW);
-    noTone(BUZZER_PIN);
-    delay(200);
-  }
+  // LED configuration test - Extended and more noticeable
+  Serial.println("Testing GREEN LED (Nearby)...");
+  digitalWrite(GREEN_LED_PIN, HIGH);
+  tone(BUZZER_PIN, 1500, 500);  // Higher pitch, longer duration
+  delay(800);  // Extended LED on time
+  digitalWrite(GREEN_LED_PIN, LOW);
+  noTone(BUZZER_PIN);
+  delay(300);
+  
+  Serial.println("Testing RED LED (Stop)...");
+  digitalWrite(RED_LED_PIN, HIGH);
+  tone(BUZZER_PIN, 1000, 500);  // Higher pitch, longer duration
+  delay(800);  // Extended LED on time
+  digitalWrite(RED_LED_PIN, LOW);
+  noTone(BUZZER_PIN);
+  delay(300);
+  
+  Serial.println("Testing BLUE LED (Status)...");
+  digitalWrite(BLUE_LED_PIN, HIGH);
+  tone(BUZZER_PIN, 1200, 500);  // Higher pitch, longer duration
+  delay(800);  // Extended LED on time
+  digitalWrite(BLUE_LED_PIN, LOW);
+  noTone(BUZZER_PIN);
+  delay(300);
   
   // Final attention beep
   tone(BUZZER_PIN, 2000, 500);  // Very high pitch, long duration

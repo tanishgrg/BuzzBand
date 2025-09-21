@@ -18,8 +18,8 @@ Arduino Uno
     Pin 9  ────► Piezo Buzzer (+)
     GND    ────► Piezo Buzzer (-)
     
-    Pin 10 ────► 220Ω Resistor ────► Red LED (+) ────► Red LED (-) ────► GND
-    Pin 11 ────► 220Ω Resistor ────► Green LED (+) ────► Green LED (-) ────► GND  
+    Pin 10 ────► 220Ω Resistor ────► Green LED (+) ────► Green LED (-) ────► GND
+    Pin 11 ────► 220Ω Resistor ────► Red LED (+) ────► Red LED (-) ────► GND  
     Pin 12 ────► 220Ω Resistor ────► Blue LED (+) ────► Blue LED (-) ────► GND
 ```
 
@@ -27,9 +27,9 @@ Arduino Uno
 
 ### **1. Hardware Assembly:**
 1. Connect piezo buzzer to Pin 9 and GND
-2. Connect red LED to Pin 10 (with 220Ω resistor)
-3. Connect green LED to Pin 11 (with 220Ω resistor)
-4. Connect blue LED to Pin 12 (with 220Ω resistor)
+2. Connect green LED to Pin 10 (with 220Ω resistor) - Nearby threshold
+3. Connect red LED to Pin 11 (with 220Ω resistor) - Stop threshold
+4. Connect blue LED to Pin 12 (with 220Ω resistor) - Status indicator
 5. Connect Arduino to computer via USB
 
 ### **2. Software Setup:**
@@ -46,15 +46,16 @@ python transit_keychain.py
 
 ## 🎵 **Alert System**
 
-### **Origin Alerts (Red LED):**
-- **ORIGIN_NEARBY**: Train within 3 minutes (red LED + high pitch)
-- **ORIGIN_APPROACH**: Train within 1 minute (red LED + medium pitch)
-- **ORIGIN_STOP**: Train within 30 seconds (red LED + low pitch)
+### **LED Alert System:**
+- **GREEN LED (Pin 10)**: Nearby threshold alerts
+  - **ORIGIN_NEARBY**: Train within 5 minutes (green LED + high pitch)
+  - **ORIGIN_APPROACH**: Train within 2 minutes (green LED + medium pitch)
+  - **DEST_NEARBY**: Train within 10 minutes (green LED + high pitch)
+  - **DEST_APPROACH**: Train within 5 minutes (green LED + medium pitch)
 
-### **Destination Alerts (Green LED):**
-- **DEST_NEARBY**: Train within 5 minutes (green LED + high pitch)
-- **DEST_APPROACH**: Train within 2 minutes (green LED + medium pitch)
-- **DEST_STOP**: Train within 1 minute (green LED + low pitch)
+- **RED LED (Pin 11)**: Stop threshold alerts
+  - **ORIGIN_STOP**: Train within 1 minute (red LED + low pitch)
+  - **DEST_STOP**: Train within 2 minutes (red LED + low pitch)
 
 ### **Status Indicator (Blue LED):**
 - Flashes with all alerts to show system is active

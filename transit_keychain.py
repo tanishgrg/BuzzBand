@@ -96,6 +96,40 @@ def send_status_update():
     else:
         print("❌ Arduino not connected")
 
+def send_led_status_update(origin_arrival, dest_arrival):
+    """Send LED status update based on current train positions"""
+    global arduino_connection
+    
+    if arduino_connection and arduino_connection.is_open:
+        try:
+            # Determine LED status based on train positions
+            if origin_arrival and dest_arrival:
+                # Both trains detected - show both LEDs
+                if origin_arrival < dest_arrival:
+                    # Origin is closer - prioritize origin LED
+                    arduino_connection.write(b"LED_STATUS_ORIGIN\n")
+                    print("💡 LED Status: Origin priority (both trains)")
+                else:
+                    # Destination is closer - prioritize destination LED
+                    arduino_connection.write(b"LED_STATUS_DEST\n")
+                    print("💡 LED Status: Destination priority (both trains)")
+            elif origin_arrival:
+                # Only origin train
+                arduino_connection.write(b"LED_STATUS_ORIGIN\n")
+                print("💡 LED Status: Origin only")
+            elif dest_arrival:
+                # Only destination train
+                arduino_connection.write(b"LED_STATUS_DEST\n")
+                print("💡 LED Status: Destination only")
+            else:
+                # No trains
+                arduino_connection.write(b"LED_STATUS_NONE\n")
+                print("💡 LED Status: No trains")
+        except Exception as e:
+            print(f"❌ Failed to send LED status: {e}")
+    else:
+        print("❌ Arduino not connected")
+
 def get_predictions_for_stop(stop_id):
     """Get train predictions for a stop"""
     url = "https://api-v3.mbta.com/predictions"
@@ -256,8 +290,8 @@ def main():
                 else:
                     send_alert("IDLE")
                 
-                # Also send a quick status update beep
-                send_status_update()
+                # Send LED status update for every poll
+                send_led_status_update(origin_arrival, dest_arrival)
             
             print("---")
             time.sleep(POLL_INTERVAL)
