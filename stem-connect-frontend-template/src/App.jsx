@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import './App.css'
 import { fetchPredictions, firstUpcomingArrivalSeconds, prettySeconds, ping, buzz } from './api'
+import KeyRouteApp from "./KeyRouteApp";
 
 /** ENV switch to show/hide dev buzz buttons */
 const DEV = import.meta.env.VITE_DEV_CONTROLS !== 'false'
@@ -271,6 +272,18 @@ export default function App() {
       </div>
 
       {error && <p className="error">Error: {error}</p>}
+
+      {/* ───────────── KeyRoute demo flow (added, non-destructive) ───────────── */}
+      <section className="card" style={{ marginTop: 24 }}>
+        <h2>KeyRoute (demo flow)</h2>
+        <p className="muted" style={{ marginBottom: 8 }}>
+          Pick origin & destination, start a session, confirm boarding, then watch the two ETAs.
+        </p>
+        <KeyRouteApp />
+      </section>
+      {/* ─────────────────────────────────────────────────────────────────────── */}
     </div>
   )
 }
+
+console.log("API base:", import.meta.env.VITE_API_BASE);
