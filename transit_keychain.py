@@ -18,11 +18,11 @@ ORIGIN_STOP = "place-babck"    # Babcock Street
 DEST_STOP = "70147"            # BU East
 
 # Alert thresholds (in seconds) - More aggressive for pronounced alerts
-ORIGIN_NEARBY_THRESHOLD = 1300   # 5 minutes (more time to notice)
+ORIGIN_NEARBY_THRESHOLD = 300   # 5 minutes (more time to notice)
 ORIGIN_APPROACH_THRESHOLD = 120  # 2 minutes
 ORIGIN_STOP_THRESHOLD = 60     # 1 minute
 
-DEST_NEARBY_THRESHOLD = 1400     # 10 minutes (more time to notice)
+DEST_NEARBY_THRESHOLD = 600     # 10 minutes (more time to notice)
 DEST_APPROACH_THRESHOLD = 300   # 5 minutes
 DEST_STOP_THRESHOLD = 120      # 2 minutes
 
