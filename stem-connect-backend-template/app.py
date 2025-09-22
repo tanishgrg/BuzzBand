@@ -1,9 +1,8 @@
-# app.py — BuzzBand backend (merged + improved)
-# - Flask API for frontend
-# - MBTA predictions + trip_id matching (consistent ETAs)
-# - Arduino serial with robust port detection
-# - SIM mode (forced via env) + auto-fallback to SIM if no hardware
-# - Dev endpoints: /events, /selftest, /sim
+# app.py — BuzzBand + KeyRoute merged backend (full)
+# - Keeps ALL of your original BuzzBand hardware + poller + dev endpoints
+# - Adds KeyRoute session flow (/session, /arrivals, /board, /progress, /stops/*)
+# - Uses your robust Arduino serial + SIM fallback
+# - Unified MBTA helpers; safe, no duplicate Flask endpoints
 
 import os
 import time
@@ -14,11 +13,13 @@ import serial.tools.list_ports
 from datetime import datetime, timezone
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+import uuid
+import json
 
 # ==============================
 # Config
 # ==============================
-API_KEY = os.getenv("MBTA_API_KEY", "c03504c502784cf2800d09ffa832c0e9")
+API_KEY = os.getenv("MBTA_API_KEY", "")
 HEADERS = {"x-api-key": API_KEY} if API_KEY else {}
 
 # SIM control:
@@ -28,18 +29,18 @@ SIM_MODE = os.getenv("SIM_MODE", "").lower() == "true"
 sim_last_cmd = None
 
 # UI thresholds (simple badge)
-NEARBY_THRESHOLD_SEC   = int(os.getenv("NEARBY_THRESHOLD_SEC", "180"))  # 3 min
-APPROACH_THRESHOLD_SEC = int(os.getenv("APPROACH_THRESHOLD_SEC", "300"))# 5 min
-STOP_THRESHOLD_SEC     = int(os.getenv("STOP_THRESHOLD_SEC", "60"))     # 1 min
+NEARBY_THRESHOLD_SEC   = int(os.getenv("NEARBY_THRESHOLD_SEC", "180"))   # 3 min
+APPROACH_THRESHOLD_SEC = int(os.getenv("APPROACH_THRESHOLD_SEC", "300")) # 5 min
+STOP_THRESHOLD_SEC     = int(os.getenv("STOP_THRESHOLD_SEC", "60"))      # 1 min
 
 # Device thresholds (alert mapping)
-ORIGIN_NEARBY_THRESHOLD    = int(os.getenv("ORIGIN_NEARBY_THRESHOLD", "300"))  # 5m
-ORIGIN_APPROACH_THRESHOLD  = int(os.getenv("ORIGIN_APPROACH_THRESHOLD", "120"))# 2m
-ORIGIN_STOP_THRESHOLD      = int(os.getenv("ORIGIN_STOP_THRESHOLD", "60"))     # 1m
+ORIGIN_NEARBY_THRESHOLD     = int(os.getenv("ORIGIN_NEARBY_THRESHOLD", "300"))  # 5m
+ORIGIN_APPROACH_THRESHOLD   = int(os.getenv("ORIGIN_APPROACH_THRESHOLD", "120"))# 2m
+ORIGIN_STOP_THRESHOLD       = int(os.getenv("ORIGIN_STOP_THRESHOLD", "60"))     # 1m
 
-DEST_NEARBY_THRESHOLD      = int(os.getenv("DEST_NEARBY_THRESHOLD", "600"))    #10m
-DEST_APPROACH_THRESHOLD    = int(os.getenv("DEST_APPROACH_THRESHOLD", "300"))  # 5m
-DEST_STOP_THRESHOLD        = int(os.getenv("DEST_STOP_THRESHOLD", "120"))      # 2m
+DEST_NEARBY_THRESHOLD       = int(os.getenv("DEST_NEARBY_THRESHOLD", "600"))    #10m
+DEST_APPROACH_THRESHOLD     = int(os.getenv("DEST_APPROACH_THRESHOLD", "300"))  # 5m
+DEST_STOP_THRESHOLD         = int(os.getenv("DEST_STOP_THRESHOLD", "120"))      # 2m
 
 # Default stops (env-overridable)
 ORIGIN_STOP  = os.getenv("ORIGIN_STOP", "place-babck")   # Babcock St (Green-B)
@@ -94,7 +95,7 @@ def find_arduino_port():
         if any(k in dev.lower() for k in ["usbmodem", "usbserial"]):
             candidates.append(dev)
 
-    # De-dup & prefer /dev/cu.* on macOS
+    # De-dup & prefer /dev/cu.* on macOS (if present)
     seen = set()
     ordered = []
     for c in candidates:
@@ -380,11 +381,59 @@ def poll_loop():
         time.sleep(POLL_INTERVAL)
 
 # =======================
-# Flask API
+# KeyRoute Session logic (added)
+# =======================
+def clamp_nonneg(x): 
+    return max(0, int(x))
+
+class Session:
+    def __init__(self, origin_stop_id, dest_stop_id, route_id=None):
+        self.id = str(uuid.uuid4())
+        self.origin_stop_id = origin_stop_id
+        self.dest_stop_id   = dest_stop_id
+        self.route_id       = route_id
+        self.state          = "AWAITING_BOARD"   # AWAITING_BOARD | ONBOARD | APPROACHING_DEST | ARRIVED
+        self.trip_id        = None
+        self.created_ts     = time.time()
+        # simple stub timers (used while waiting to board)
+        self.stub_origin_eta= 240      # 4 min until train reaches origin
+        self.stub_dest_eta  = 1800     # 30 min total to destination
+        self.boarded_ts     = None
+        self.last_emitted_state = None
+
+sessions = {}  # session_id -> Session
+
+def emit_state_change(session: Session, new_state: str):
+    """Fire hardware cues on KeyRoute transitions (maps into your Arduino command set)."""
+    if session.last_emitted_state == new_state:
+        return
+    session.last_emitted_state = new_state
+
+    # Map simple states into your device's existing command vocabulary
+    if new_state == "AWAITING_BOARD":
+        # Gentle cue to indicate tracking started (origin-side)
+        _arduino_write("ORIGIN_NEARBY")
+        _arduino_write("BUZZ 800 60")
+    elif new_state == "ONBOARD":
+        # Quiet the origin cues
+        _arduino_write("IDLE")
+        _arduino_write("BUZZ 600 40")
+    elif new_state == "APPROACHING_DEST":
+        # Destination approaching cue
+        _arduino_write("DEST_APPROACH")
+        _arduino_write("BUZZ 1000 150")
+    elif new_state == "ARRIVED":
+        # Destination reached cue
+        _arduino_write("DEST_STOP")
+        _arduino_write("BUZZ 1200 350")
+
+# =======================
+# Flask API (ALL endpoints)
 # =======================
 app = Flask(__name__)
 CORS(app)
 
+# ---- BuzzBand (original) endpoints ----
 @app.route("/health")
 def health():
     connected = bool(arduino_connection and arduino_connection.is_open)
@@ -488,6 +537,197 @@ def config():
 @app.route("/events")
 def events():
     return jsonify({"events": event_log[-50:]})
+
+# ---- KeyRoute endpoints (added) ----
+
+def mbta_get_json(path, params):
+    """Shared helper for stops/search + arrivals."""
+    url = f"https://api-v3.mbta.com{path}"
+    headers = {"accept":"application/json"}
+    if API_KEY:
+        headers["x-api-key"] = API_KEY
+    r = requests.get(url, params=params, headers=headers, timeout=12)
+    r.raise_for_status()
+    return r.json()
+
+@app.post("/session")
+def create_session():
+    """Start a KeyRoute session (origin/destination chosen by user)."""
+    data = request.get_json(force=True)
+    s = Session(
+        origin_stop_id=data["origin_stop_id"],
+        dest_stop_id=data["dest_stop_id"],
+        route_id=data.get("route_id"),
+    )
+    sessions[s.id] = s
+    emit_state_change(s, s.state)  # green/tiny cue
+    return jsonify({"session_id": s.id, "state": s.state})
+
+@app.get("/arrivals")
+def arrivals():
+    """List a few upcoming trains at the origin stop (ETA + trip_id) for boarding."""
+    origin_stop_id = request.args.get("origin_stop_id")
+    route_id = request.args.get("route_id")  # optional
+    if not origin_stop_id:
+        return jsonify({"arrivals": []})
+
+    params = {
+        "filter[stop]": origin_stop_id,
+        "sort": "departure_time",
+        "page[limit]": 3,
+        "include": "trip,route"
+    }
+    if route_id:
+        params["filter[route]"] = route_id
+
+    data = mbta_get_json("/predictions", params)
+    included = {item["id"]: item for item in data.get("included", [])}
+    out = []
+    now = time.time()
+    for p in data.get("data", []):
+        attrs = p.get("attributes", {})
+        dep_iso = attrs.get("departure_time") or attrs.get("arrival_time")
+        if not dep_iso:
+            continue
+        dep_dt = parse_time(dep_iso)
+        if not dep_dt:
+            continue
+        dep_epoch = dep_dt.timestamp()
+        eta_sec = max(0, int(dep_epoch - now))
+        trip_rel = p.get("relationships", {}).get("trip", {}).get("data")
+        trip_id = trip_rel["id"] if trip_rel else None
+        headsign = None
+        if trip_id and trip_id in included and included[trip_id]["type"] == "trip":
+            headsign = included[trip_id]["attributes"].get("headsign")
+        out.append({
+            "trip_id": trip_id or f"UNKNOWN_{int(dep_epoch)}",
+            "headsign": headsign or "Towards destination",
+            "dep_epoch": int(dep_epoch),
+            "eta_sec": eta_sec
+        })
+
+    return jsonify({"arrivals": out})
+
+@app.post("/board")
+def board_trip():
+    """User confirms they boarded a specific trip_id."""
+    data = request.get_json(force=True)
+    s = sessions[data["session_id"]]
+    s.trip_id = data["trip_id"]
+    s.state = "ONBOARD"
+    s.boarded_ts = time.time()
+    emit_state_change(s, s.state)  # quiet origin cues
+    return jsonify({"ok": True, "state": s.state, "trip_id": s.trip_id})
+
+def eta_for_trip_to_stop(trip_id, dest_stop_id):
+    """Ask MBTA for ETA for a given trip to reach dest_stop."""
+    if not trip_id:
+        return None
+    params = {
+        "filter[trip]": trip_id,
+        "filter[stop]": dest_stop_id,
+        "sort": "arrival_time",
+        "page[limit]": 1
+    }
+    try:
+        data = mbta_get_json("/predictions", params)
+        now = time.time()
+        for p in data.get("data", []):
+            attrs = p.get("attributes", {})
+            arr_iso = attrs.get("arrival_time") or attrs.get("departure_time")
+            if not arr_iso:
+                continue
+            arr_dt = parse_time(arr_iso)
+            if not arr_dt:
+                continue
+            return max(0, int(arr_dt.timestamp() - now))
+    except Exception as e:
+        print(f"eta_for_trip_to_stop error: {e}")
+    return None
+
+@app.get("/progress")
+def progress():
+    """Session progress: state + ETA to origin (pre-board) and ETA to destination."""
+    session_id = request.args.get("session_id")
+    s = sessions[session_id]
+
+    now = time.time()
+    if s.state == "AWAITING_BOARD":
+        # While waiting to board, show countdowns from stubs (or you could call MBTA for origin live)
+        eta_origin = clamp_nonneg(s.stub_origin_eta - (now - s.created_ts))
+        eta_dest   = clamp_nonneg(s.stub_dest_eta   - (now - s.created_ts))
+    else:
+        # After boarding: origin disabled; destination uses real trip_id ETA
+        eta_origin = None
+        eta_dest = eta_for_trip_to_stop(s.trip_id, s.dest_stop_id)
+        if eta_dest is None:
+            elapsed_onboard = now - (s.boarded_ts or now)
+            eta_dest = clamp_nonneg(1500 - elapsed_onboard)
+
+        # Transition to approaching/arrived based on real ETA where possible
+        if s.state == "ONBOARD" and eta_dest is not None and eta_dest <= 240:
+            s.state = "APPROACHING_DEST"
+            emit_state_change(s, s.state)
+        if eta_dest is not None and eta_dest == 0 and s.state in ("ONBOARD", "APPROACHING_DEST"):
+            s.state = "ARRIVED"
+            emit_state_change(s, s.state)
+
+    return jsonify({
+        "state": s.state,
+        "eta_to_origin_sec": eta_origin,
+        "eta_to_destination_sec": eta_dest,
+        "trip_id": s.trip_id
+    })
+
+@app.get("/stops/search")
+def stops_search():
+    """Search stops by text (name)."""
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return jsonify({"stops": []})
+    data = mbta_get_json("/stops", {
+        "filter[search]": q,
+        "page[limit]": 12,
+        "sort": "name"
+    })
+    out = []
+    for s in data.get("data", []):
+        attrs = s["attributes"]
+        out.append({
+            "stop_id": s["id"],
+            "name": attrs.get("name"),
+            "lat": attrs.get("latitude"),
+            "lon": attrs.get("longitude"),
+        })
+    return jsonify({"stops": out})
+
+@app.get("/stops/near")
+def stops_near():
+    """Find stops near a lat/lon (radius meters)."""
+    lat = request.args.get("lat", type=float)
+    lon = request.args.get("lon", type=float)
+    radius_m = request.args.get("radius_m", default=1200, type=int)  # ~0.75 mi
+    if lat is None or lon is None:
+        return jsonify({"stops": []})
+
+    data = mbta_get_json("/stops", {
+        "filter[latitude]": lat,
+        "filter[longitude]": lon,
+        "filter[radius]": radius_m,
+        "page[limit]": 12,
+        "sort": "distance"
+    })
+    out = []
+    for s in data.get("data", []):
+        attrs = s["attributes"]
+        out.append({
+            "stop_id": s["id"],
+            "name": attrs.get("name"),
+            "lat": attrs.get("latitude"),
+            "lon": attrs.get("longitude"),
+            "distance_m": attrs.get("distance"),
+        })
+    return jsonify({"stops": out})
 
 # =======================
 # Entrypoint
