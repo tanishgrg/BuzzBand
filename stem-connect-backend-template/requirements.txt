@@ -1,4 +1,4 @@
-Flask
-Flask-CORS
-pyserial
+flask
+flask-cors
 requests
+# pyserial  <-- leave commented until you plug in hardware
