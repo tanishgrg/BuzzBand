@@ -1,9 +1,0 @@
-stem-connect-frontend-template/node_modules/
-stem-connect-frontend-template/dist/
-stem-connect-frontend-template/.vite/
-stem-connect-frontend-template/.env
-stem-connect-backend-template/.venv/
-stem-connect-backend-template/__pycache__/
-.env
-*.pyc
-__pycache__/
