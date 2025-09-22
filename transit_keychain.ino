@@ -1,291 +1,202 @@
 /*
- * Transit Keychain - Arduino Code
- * 
- * A keychain that buzzes and flashes LEDs based on train proximity
- * 
- * Hardware:
- * - Piezo buzzer on pin 9
- * - Red LED on pin 10 (origin alerts)
- * - Green LED on pin 11 (destination alerts)
- * - Blue LED on pin 12 (status indicator)
- * 
- * Commands from Python:
- * - "ORIGIN_NEARBY" - Train approaching origin (red LED + buzzer)
- * - "ORIGIN_APPROACH" - Train very close to origin (red LED + buzzer)
- * - "ORIGIN_STOP" - Train at origin (red LED + buzzer)
- * - "DEST_NEARBY" - Train approaching destination (green LED + buzzer)
- * - "DEST_APPROACH" - Train very close to destination (green LED + buzzer)
- * - "DEST_STOP" - Train at destination (green LED + buzzer)
- * - "IDLE" - Stop all alerts
+ * Transit Keychain - Arduino Nano ESP32
+ * Urgency → Color (per request):
+ *   FAR (least urgent)    → RED    (D9)
+ *   MIDDLE (approaching)  → YELLOW (D8)
+ *   CLOSEST / ARRIVING    → GREEN  (D7)
+ *
+ * Wiring:
+ * - Piezo buzzer  -> D6  (BUZZER_PIN)
+ * - Green LED     -> D7  (GREEN_LED_PIN)
+ * - Yellow LED    -> D8  (YELLOW_LED_PIN)
+ * - Red LED       -> D9  (RED_LED_PIN)
+ * - Status LED    -> D5  (STATUS_LED_PIN)
+ *
+ * Notes:
+ * - Avoid D0/D1 (USB serial).
+ * - Use 220Ω series resistors for LEDs.
+ * - Passive buzzer (tone).
  */
 
-// Pin definitions
-const int BUZZER_PIN = 9;
-const int GREEN_LED_PIN = 10;   // Nearby threshold indicator
-const int RED_LED_PIN = 11;     // Stop threshold indicator
-const int BLUE_LED_PIN = 12;    // Status indicator
+#if defined(ARDUINO_ARCH_ESP32)
+#include <driver/ledc.h>
+static const int _TONE_LEDC_CHANNEL = 0;
+static const int _TONE_LEDC_TIMER   = 0;
 
-// Alert patterns - Extended duration and more noticeable
-const int NEARBY_PATTERN[] = {500, 200, 500, 200, 500, 200, 500};      // Extended short pattern
-const int APPROACH_PATTERN[] = {800, 300, 800, 300, 800, 300, 800};     // Extended medium pattern
-const int STOP_PATTERN[] = {1200, 400, 1200, 400, 1200, 400, 1200, 400, 1200};  // Extended long pattern
+void toneESP32(int pin, unsigned int freq, unsigned long dur = 0) {
+  ledcAttachPin(pin, _TONE_LEDC_CHANNEL);
+  ledcSetup(_TONE_LEDC_CHANNEL, 2000 /*base*/, 10);
+  ledcWriteTone(_TONE_LEDC_CHANNEL, freq);
+  if (dur > 0) {
+    delay(dur);
+    ledcWriteTone(_TONE_LEDC_CHANNEL, 0);
+  }
+}
+void noToneESP32(int pin) { (void)pin; ledcWriteTone(_TONE_LEDC_CHANNEL, 0); }
+#define TONE(pin, f, d) toneESP32((pin), (f), (d))
+#define NOTONE(pin)     noToneESP32((pin))
+#define TONE_BLOCKS     1   // ESP32 helper: TONE with duration blocks & stops
+#else
+#define TONE(pin, f, d) tone((pin), (f), (d))
+#define NOTONE(pin)     noTone((pin))
+#define TONE_BLOCKS     0   // AVR tone(duration) is non-blocking
+#endif
 
-// Frequencies for different alert levels - More noticeable
-const int NEARBY_FREQ = 1500;   // Higher pitch for attention
-const int APPROACH_FREQ = 1300; // Medium-high pitch
-const int STOP_FREQ = 1000;     // Medium pitch (more noticeable)
+// ================== Pins (Nano ESP32) ==================
+const int BUZZER_PIN      = 6;   // D6
+const int GREEN_LED_PIN   = 7;   // D7 (closest/urgent)
+const int YELLOW_LED_PIN  = 8;   // D8 (middle)
+const int RED_LED_PIN     = 9;   // D9 (far)
+const int STATUS_LED_PIN  = 5;   // D5 (status / debug)
 
-// Pattern lengths - Extended for more noticeable alerts
-const int NEARBY_LENGTH = 7;     // 7 beeps for nearby (extended)
-const int APPROACH_LENGTH = 7;   // 7 beeps for approach (extended)
-const int STOP_LENGTH = 9;       // 9 beeps for stop (extended)
+// ================== Sound defaults ==================
+const int FAR_FREQ        = 1500; // red
+const int MID_FREQ        = 1300; // yellow
+const int CLOSE_FREQ      = 1000; // green
 
-// State variables
-bool isAlerting = false;
-unsigned long alertStartTime = 0;
-int currentPatternIndex = 0;
-int currentPatternLength = 0;
-const int* currentPattern = nullptr;
-int currentFrequency = 0;
-int currentLEDPin = 0;
+// Pulse pattern (LED + buzzer in sync)
+const unsigned PULSE_ON_MS  = 300;
+const unsigned PULSE_OFF_MS = 200;
+
+// ======= Feature switches =======
+const bool ENABLE_DEST_ALERTS = false;  // keep destination ETA alerts disabled
+
+// ======= Prototypes =======
+void stopAll();
+void statusPing();
+void alertFlashing(int ledPin, int freq, unsigned total_ms);
+void handleCommand(String command);
 
 void setup() {
   Serial.begin(115200);
-  
-  // Set pin modes
+
   pinMode(BUZZER_PIN, OUTPUT);
-  pinMode(RED_LED_PIN, OUTPUT);
   pinMode(GREEN_LED_PIN, OUTPUT);
-  pinMode(BLUE_LED_PIN, OUTPUT);
-  
-  // Initialize all pins to LOW
-  digitalWrite(BUZZER_PIN, LOW);
-  digitalWrite(RED_LED_PIN, LOW);
-  digitalWrite(GREEN_LED_PIN, LOW);
-  digitalWrite(BLUE_LED_PIN, LOW);
-  
-  // Startup sequence
-  Serial.println("Transit Keychain Ready");
-  startupSequence();
+  pinMode(YELLOW_LED_PIN, OUTPUT);
+  pinMode(RED_LED_PIN, OUTPUT);
+  pinMode(STATUS_LED_PIN, OUTPUT);
+
+  stopAll();
+
+  Serial.println("Transit Keychain Ready (Nano ESP32)");
+  Serial.println("READY");
+
+  // Self-test: RED (far) → YELLOW (mid) → GREEN (closest) → STATUS
+  alertFlashing(RED_LED_PIN,   FAR_FREQ,   500);
+  delay(150);
+  alertFlashing(YELLOW_LED_PIN,MID_FREQ,   500);
+  delay(150);
+  alertFlashing(GREEN_LED_PIN, CLOSE_FREQ, 500);
+  delay(150);
+  digitalWrite(STATUS_LED_PIN, HIGH); TONE(BUZZER_PIN, 1200, 160);
+  delay(200); digitalWrite(STATUS_LED_PIN, LOW);
 }
 
 void loop() {
-  // Check for serial commands
   if (Serial.available()) {
     String command = Serial.readStringUntil('\n');
     command.trim();
     command.toUpperCase();
-    
-    Serial.print("Received: ");
-    Serial.println(command);
-    
+    if (!command.length()) return;
+
+    Serial.print("RX: "); Serial.println(command);
     handleCommand(command);
   }
-  
-  // Alert patterns are now self-executing, no need to call from loop
 }
 
-void handleCommand(String command) {
-  if (command == "ORIGIN_NEARBY") {
-    simpleAlert(GREEN_LED_PIN, NEARBY_FREQ, 3000);  // 3 seconds
-    Serial.println("Origin nearby alert - GREEN LED");
-  }
-  else if (command == "ORIGIN_APPROACH") {
-    simpleAlert(GREEN_LED_PIN, APPROACH_FREQ, 5000);  // 5 seconds
-    Serial.println("Origin approach alert - GREEN LED");
-  }
-  else if (command == "ORIGIN_STOP") {
-    simpleAlert(RED_LED_PIN, STOP_FREQ, 8000);  // 8 seconds
-    Serial.println("Origin stop alert - RED LED");
-  }
-  else if (command == "DEST_NEARBY") {
-    simpleAlert(GREEN_LED_PIN, NEARBY_FREQ, 3000);  // 3 seconds
-    Serial.println("Destination nearby alert - GREEN LED");
-  }
-  else if (command == "DEST_APPROACH") {
-    simpleAlert(GREEN_LED_PIN, APPROACH_FREQ, 5000);  // 5 seconds
-    Serial.println("Destination approach alert - GREEN LED");
-  }
-  else if (command == "DEST_STOP") {
-    simpleAlert(RED_LED_PIN, STOP_FREQ, 8000);  // 8 seconds
-    Serial.println("Destination stop alert - RED LED");
-  }
-  else if (command == "IDLE") {
-    stopAlert();
-    Serial.println("All alerts stopped");
-  }
-  else if (command == "URGENT") {
-    urgentAlert();
-    Serial.println("Urgent alert triggered");
-  }
-  else if (command == "STATUS_UPDATE") {
-    statusUpdate();
-    Serial.println("Status update alert");
-  }
-  else if (command == "LED_STATUS_ORIGIN") {
-    ledStatusOrigin();
-    Serial.println("LED Status: Origin");
-  }
-  else if (command == "LED_STATUS_DEST") {
-    ledStatusDest();
-    Serial.println("LED Status: Destination");
-  }
-  else if (command == "LED_STATUS_NONE") {
-    ledStatusNone();
-    Serial.println("LED Status: None");
-  }
-  else {
-    Serial.println("Unknown command: " + command);
-  }
-}
+// ================== Helpers ==================
+// Play flashing LED + buzzer in-phase for total_ms.
+// Ensures LED on-time == buzzer on-time (no extra hold).
+void alertFlashing(int ledPin, int freq, unsigned total_ms) {
+  unsigned elapsed = 0;
+  while (elapsed < total_ms) {
+    unsigned chunk = min(PULSE_ON_MS, total_ms - elapsed);
 
-void simpleAlert(int ledPin, int frequency, int duration) {
-  // Simple method: turn on LED and buzzer for specified duration
-  digitalWrite(ledPin, HIGH);
-  digitalWrite(BLUE_LED_PIN, HIGH);
-  tone(BUZZER_PIN, frequency, duration);
-  delay(duration);
-  
-  // Turn off everything
-  digitalWrite(ledPin, LOW);
-  digitalWrite(BLUE_LED_PIN, LOW);
-  noTone(BUZZER_PIN);
-}
-
-void startAlert(const int* pattern, int length, int frequency, int ledPin) {
-  // Stop any current alert
-  stopAlert();
-  
-  // Simple direct execution method
-  currentLEDPin = ledPin;
-  
-  // Execute pattern directly with delays
-  for (int i = 0; i < length; i++) {
-    int stepDuration = pattern[i];
-    
-    if (i % 2 == 0) {
-      // Beep step - turn on everything
-      tone(BUZZER_PIN, frequency, stepDuration);
-      digitalWrite(currentLEDPin, HIGH);
-      digitalWrite(BLUE_LED_PIN, HIGH);
-      delay(stepDuration);  // Wait for beep to complete
+    // ON phase
+    digitalWrite(ledPin, HIGH);
+    if (TONE_BLOCKS) {
+      TONE(BUZZER_PIN, freq, chunk);    // blocks and stops (ESP32)
     } else {
-      // Pause step - turn off buzzer, keep main LED on
-      noTone(BUZZER_PIN);
-      digitalWrite(currentLEDPin, HIGH);  // Keep main LED on
-      digitalWrite(BLUE_LED_PIN, LOW);     // Turn off status LED
-      delay(stepDuration);  // Wait for pause
+      TONE(BUZZER_PIN, freq, chunk);    // non-blocking (AVR)
+      delay(chunk);
+      NOTONE(BUZZER_PIN);
     }
-  }
-  
-  // Pattern complete - turn off everything
-  stopAlert();
-}
+    digitalWrite(ledPin, LOW);
 
-void stopAlert() {
-  isAlerting = false;
-  currentPattern = nullptr;
-  currentPatternIndex = 0;
-  noTone(BUZZER_PIN);
-  digitalWrite(RED_LED_PIN, LOW);
-  digitalWrite(GREEN_LED_PIN, LOW);
-  digitalWrite(BLUE_LED_PIN, LOW);
-}
+    elapsed += chunk;
+    if (elapsed >= total_ms) break;
 
-void urgentAlert() {
-  // Very pronounced urgent alert - impossible to miss
-  for (int i = 0; i < 8; i++) {  // Extended urgent alert
-    // All LEDs on
-    digitalWrite(RED_LED_PIN, HIGH);
-    digitalWrite(GREEN_LED_PIN, HIGH);
-    digitalWrite(BLUE_LED_PIN, HIGH);
-    
-    // Very high pitch, extended duration
-    tone(BUZZER_PIN, 2500, 600);  // Higher pitch, longer duration
-    delay(800);  // Extended LED on time
-    
-    // All LEDs off
-    digitalWrite(RED_LED_PIN, LOW);
-    digitalWrite(GREEN_LED_PIN, LOW);
-    digitalWrite(BLUE_LED_PIN, LOW);
-    noTone(BUZZER_PIN);
-    delay(300);  // Shorter pause for more urgent feel
+    // OFF phase
+    unsigned offChunk = min(PULSE_OFF_MS, total_ms - elapsed);
+    delay(offChunk);
+    elapsed += offChunk;
   }
 }
 
-void statusUpdate() {
-  // More noticeable status update alert
-  digitalWrite(BLUE_LED_PIN, HIGH);
-  tone(BUZZER_PIN, 1200, 200);  // Higher pitch, longer duration
-  delay(300);  // Extended LED on time
-  digitalWrite(BLUE_LED_PIN, LOW);
-  noTone(BUZZER_PIN);
+void stopAll() {
+  NOTONE(BUZZER_PIN);
+  digitalWrite(GREEN_LED_PIN, LOW);
+  digitalWrite(YELLOW_LED_PIN, LOW);
+  digitalWrite(RED_LED_PIN, LOW);
+  digitalWrite(STATUS_LED_PIN, LOW);
 }
 
-void ledStatusOrigin() {
-  // Show origin status - green LED for nearby, red LED for stop
-  digitalWrite(GREEN_LED_PIN, HIGH);
-  digitalWrite(RED_LED_PIN, LOW);
-  digitalWrite(BLUE_LED_PIN, HIGH);  // Status indicator
-  delay(1000);  // Show for 1 second
-  digitalWrite(GREEN_LED_PIN, LOW);
-  digitalWrite(BLUE_LED_PIN, LOW);
+void statusPing() {
+  digitalWrite(STATUS_LED_PIN, HIGH);
+  TONE(BUZZER_PIN, 1200, 120);
+  delay(150);
+  digitalWrite(STATUS_LED_PIN, LOW);
 }
 
-void ledStatusDest() {
-  // Show destination status - green LED for nearby, red LED for stop
-  digitalWrite(GREEN_LED_PIN, HIGH);
-  digitalWrite(RED_LED_PIN, LOW);
-  digitalWrite(BLUE_LED_PIN, HIGH);  // Status indicator
-  delay(1000);  // Show for 1 second
-  digitalWrite(GREEN_LED_PIN, LOW);
-  digitalWrite(BLUE_LED_PIN, LOW);
-}
+// ================== Command handling ==================
+void handleCommand(String command) {
+  // Generic buzzer: "BUZZ <freqHz> <durationMs>" (status LED blips only)
+  if (command.startsWith("BUZZ")) {
+    int s1 = command.indexOf(' ');
+    int s2 = command.indexOf(' ', s1 + 1);
+    if (s1 > 0 && s2 > s1) {
+      int freq = command.substring(s1 + 1, s2).toInt();
+      int dur  = command.substring(s2 + 1).toInt();
+      statusPing();
+#if TONE_BLOCKS
+      TONE(BUZZER_PIN, freq, dur);
+#else
+      TONE(BUZZER_PIN, freq, dur);
+      delay(dur);
+      NOTONE(BUZZER_PIN);
+#endif
+      Serial.println("OK BUZZ");
+    } else {
+      Serial.println("ERR BUZZ SYNTAX");
+    }
+    return;
+  }
 
-void ledStatusNone() {
-  // No trains - turn off all LEDs
-  digitalWrite(GREEN_LED_PIN, LOW);
-  digitalWrite(RED_LED_PIN, LOW);
-  digitalWrite(BLUE_LED_PIN, LOW);
-}
+  // -------- ORIGIN alerts (mapped to new color order) --------
+  if (command == "ORIGIN_NEARBY")       { alertFlashing(RED_LED_PIN,    FAR_FREQ,   3000);  Serial.println("OK ORIGIN_NEARBY");   return; } // far → RED
+  if (command == "ORIGIN_APPROACH")     { alertFlashing(YELLOW_LED_PIN, MID_FREQ,   5000);  Serial.println("OK ORIGIN_APPROACH"); return; } // mid → YELLOW
+  if (command == "ORIGIN_STOP")         { alertFlashing(GREEN_LED_PIN,  CLOSE_FREQ, 8000);  Serial.println("OK ORIGIN_STOP");     return; } // closest → GREEN
 
-void startupSequence() {
-  // More pronounced startup sequence
-  Serial.println("Starting Transit Keychain...");
-  Serial.println("LED Configuration:");
-  Serial.println("  GREEN LED (Pin 10) - Nearby threshold");
-  Serial.println("  RED LED (Pin 11) - Stop threshold");
-  Serial.println("  BLUE LED (Pin 12) - Status indicator");
-  
-  // LED configuration test - Extended and more noticeable
-  Serial.println("Testing GREEN LED (Nearby)...");
-  digitalWrite(GREEN_LED_PIN, HIGH);
-  tone(BUZZER_PIN, 1500, 500);  // Higher pitch, longer duration
-  delay(800);  // Extended LED on time
-  digitalWrite(GREEN_LED_PIN, LOW);
-  noTone(BUZZER_PIN);
-  delay(300);
-  
-  Serial.println("Testing RED LED (Stop)...");
-  digitalWrite(RED_LED_PIN, HIGH);
-  tone(BUZZER_PIN, 1000, 500);  // Higher pitch, longer duration
-  delay(800);  // Extended LED on time
-  digitalWrite(RED_LED_PIN, LOW);
-  noTone(BUZZER_PIN);
-  delay(300);
-  
-  Serial.println("Testing BLUE LED (Status)...");
-  digitalWrite(BLUE_LED_PIN, HIGH);
-  tone(BUZZER_PIN, 1200, 500);  // Higher pitch, longer duration
-  delay(800);  // Extended LED on time
-  digitalWrite(BLUE_LED_PIN, LOW);
-  noTone(BUZZER_PIN);
-  delay(300);
-  
-  // Final attention beep
-  tone(BUZZER_PIN, 2000, 500);  // Very high pitch, long duration
-  delay(600);
-  noTone(BUZZER_PIN);
-  
-  Serial.println("Startup complete - Transit Keychain ready");
+  // -------- DESTINATION alerts (no-op unless enabled) --------
+  if (command == "DEST_NEARBY" || command == "DEST_APPROACH" || command == "DEST_STOP") {
+    if (ENABLE_DEST_ALERTS) {
+      if (command == "DEST_NEARBY")       { alertFlashing(RED_LED_PIN,    FAR_FREQ,   3000); Serial.println("OK DEST_NEARBY"); }
+      else if (command == "DEST_APPROACH"){ alertFlashing(YELLOW_LED_PIN, MID_FREQ,   5000); Serial.println("OK DEST_APPROACH"); }
+      else if (command == "DEST_STOP")    { alertFlashing(GREEN_LED_PIN,  CLOSE_FREQ, 8000); Serial.println("OK DEST_STOP"); }
+    } else {
+      Serial.println("OK DEST_IGNORED");
+    }
+    return;
+  }
+
+  // -------- Utilities --------
+  if (command == "IDLE")              { stopAll();        Serial.println("OK IDLE"); return; }
+  if (command == "URGENT")            { alertFlashing(GREEN_LED_PIN, 2500, 2000); Serial.println("OK URGENT"); return; } // quick intense green strobe
+  if (command == "STATUS_UPDATE")     { statusPing();     Serial.println("OK STATUS"); return; }
+  if (command == "LED_STATUS_ORIGIN") { digitalWrite(GREEN_LED_PIN, HIGH); delay(300); digitalWrite(GREEN_LED_PIN, LOW); Serial.println("OK LED_ORIGIN"); return; }
+  if (command == "LED_STATUS_DEST")   { Serial.println(ENABLE_DEST_ALERTS ? "OK LED_DEST" : "OK LED_DEST_IGNORED"); return; }
+  if (command == "LED_STATUS_NONE")   { stopAll();        Serial.println("OK LED_NONE"); return; }
+  if (command == "PING")              { Serial.println("PONG"); return; }
+
+  Serial.println("ERR UNKNOWN");
 }
