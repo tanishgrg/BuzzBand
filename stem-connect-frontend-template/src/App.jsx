@@ -167,15 +167,10 @@ export default function App() {
 
   return (
     <div className={`app ${mode === 'BLIND' ? 'mode-blind' : ''} ${mode === 'DEAF' ? 'mode-deaf' : ''}`}>
-      <header className="header">
-        <h1>BuzzBand / TransitBuddy</h1>
-        <div className="mode-switch">
-          <button className={mode==='BASE'?'active':''} onClick={()=>setMode('BASE')} aria-pressed={mode==='BASE'}>Base</button>
-          <button className={mode==='BLIND'?'active':''} onClick={()=>setMode('BLIND')} aria-pressed={mode==='BLIND'}>Blind</button>
-          <button className={mode==='DEAF'?'active':''} onClick={()=>setMode('DEAF')} aria-pressed={mode==='DEAF'}>Deaf</button>
-          <span className="status-pill">{status}</span>
-        </div>
-      </header>
+          <header className="header">
+      <h1>KeyRoute</h1>
+    </header>
+
 
       {/* DEAF visual flash */}
       {flash && <div className={`flash flash-${status.toLowerCase()}`} aria-hidden="true" />}
@@ -206,6 +201,7 @@ export default function App() {
               </select>
             )}
           </div>
+
 
           <div className="row" style={{marginTop:12}}>
             <label>Destination Stop</label>
@@ -248,8 +244,6 @@ export default function App() {
           {guidanceOn ? 'Stop Guidance' : 'Start Guidance'}
         </button>
 
-        <button onClick={checkBackend}>Ping backend</button>
-        <span className="muted">Backend: {backendStatus}</span>
 
         {DEV && (
           <details>
@@ -258,7 +252,6 @@ export default function App() {
               <button onClick={()=>buzz('NEARBY')}>Buzz NEARBY</button>
               <button onClick={()=>buzz('APPROACH')}>Buzz APPROACH</button>
               <button onClick={()=>buzz('STOP')}>Buzz STOP</button>
-              <button onClick={()=>buzz('IDLE')}>Buzz IDLE</button>
             </div>
           </details>
         )}
@@ -272,16 +265,6 @@ export default function App() {
       </div>
 
       {error && <p className="error">Error: {error}</p>}
-
-      {/* ───────────── KeyRoute demo flow (added, non-destructive) ───────────── */}
-      <section className="card" style={{ marginTop: 24 }}>
-        <h2>KeyRoute (demo flow)</h2>
-        <p className="muted" style={{ marginBottom: 8 }}>
-          Pick origin & destination, start a session, confirm boarding, then watch the two ETAs.
-        </p>
-        <KeyRouteApp />
-      </section>
-      {/* ─────────────────────────────────────────────────────────────────────── */}
     </div>
   )
 }

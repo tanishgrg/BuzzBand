@@ -1,199 +1,223 @@
-import { useEffect, useRef, useState } from "react";
-import {
-  createSession,
-  getArrivals,
-  boardTrip,
-  getProgress,
-  stopsNear,
-  stopsSearch,
-} from "./keyrouteApi";
+import { useEffect, useRef, useState } from 'react'
+import './App.css'
+import { fetchPredictions, firstUpcomingArrivalSeconds, prettySeconds, buzz } from './api' // no ping, no KeyRouteApp import
 
-const fmt = (s) =>
-  s == null
-    ? "—"
-    : s < 60
-    ? `in ${Math.max(5, Math.round(s / 5) * 5)}s`
-    : `in ${Math.round(s / 60)} min`;
+const NEARBY_THRESHOLD_SEC   = 720
+const APPROACH_THRESHOLD_SEC = 480
+const STOP_THRESHOLD_SEC     = 240
+const DEFAULT_ORIGIN = 'place-babck'
+const DEFAULT_DEST   = '70147'
+const POLL_INTERVAL_MS = 30_000
 
-const asClock = (epoch) =>
-  new Date(epoch * 1000).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
+const NEARBY_DEMO_STOPS = [
+  { id: 'place-babck', name: 'Babcock St',  lat: 42.35178, lon: -71.12168 },
+  { id: '70147',       name: 'BU East',      lat: 42.35029, lon: -71.10696 },
+  { id: 'place-bland', name: 'Blandford St', lat: 42.34959, lon: -71.09953 },
+]
 
-export default function KeyRouteApp() {
-  const [origin, setOrigin] = useState(null);
-  const [dest, setDest] = useState(null);
-  const [sessionId, setSessionId] = useState();
-  const [state, setState] = useState("IDLE");
-  const [arrivals, setArrivals] = useState([]);
-  const [etaO, setEtaO] = useState(null);
-  const [etaD, setEtaD] = useState(null);
-  const [nearOrigin, setNearOrigin] = useState(false);
+function toRad(d) { return (d * Math.PI) / 180 }
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371e3
+  const φ1 = toRad(lat1), φ2 = toRad(lat2)
+  const Δφ = toRad(lat2 - lat1), Δλ = toRad(lon2 - lon1)
+  const a = Math.sin(Δφ/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)**2
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+function metersToMiles(m){ return m/1609.344 }
+function buildNearbyList(lat, lon) {
+  return NEARBY_DEMO_STOPS
+    .map(s => ({ ...s, dMiles: metersToMiles(haversineMeters(lat, lon, s.lat, s.lon)) }))
+    .sort((a,b)=> a.dMiles - b.dMiles)
+    .slice(0, 8)
+}
 
-  const poll = useRef();
+export default function App() {
+  const [guidanceOn, setGuidanceOn] = useState(false)
 
-  // Ensure mobile viewport meta exists
-  useEffect(() => {
-    if (!document.querySelector('meta[name="viewport"]')) {
-      const m = document.createElement("meta");
-      m.name = "viewport";
-      m.content = "width=device-width, initial-scale=1";
-      document.head.appendChild(m);
+  const [originStop, setOriginStop] = useState(DEFAULT_ORIGIN)
+  const [destStop, setDestStop]     = useState(DEFAULT_DEST)
+
+  const [originEta, setOriginEta]   = useState(null)
+  const [destEta, setDestEta]       = useState(null)
+  const [status, setStatus]         = useState('IDLE')
+  const [loading, setLoading]       = useState(false)
+  const [error, setError]           = useState(null)
+  const [lastUpdated, setLastUpdated] = useState(null)
+
+  const [toast, setToast] = useState(null)
+  const [flash, setFlash] = useState(false)
+
+  const [nearbyOrigin, setNearbyOrigin] = useState([])
+  const [nearbyDest, setNearbyDest]     = useState([])
+  const [locBusy, setLocBusy] = useState(false)
+
+  const timerRef = useRef(null)
+  const lastAnnouncedRef = useRef(null)
+
+  async function refresh() {
+    setLoading(true); setError(null)
+    try {
+      const [pO, pD] = await Promise.all([
+        fetchPredictions(originStop),
+        fetchPredictions(destStop),
+      ])
+      const oSecs = firstUpcomingArrivalSeconds(pO)
+      const dSecs = firstUpcomingArrivalSeconds(pD)
+      setOriginEta(oSecs)
+      setDestEta(dSecs)
+      setLastUpdated(new Date())
+
+      let next = 'IDLE'
+      if (oSecs != null && oSecs <= NEARBY_THRESHOLD_SEC) next = 'NEARBY'
+      if (dSecs != null && dSecs <= APPROACH_THRESHOLD_SEC) next = 'APPROACH'
+      if (dSecs != null && dSecs <= STOP_THRESHOLD_SEC) next = 'STOP'
+      setStatus(next)
+    } catch (e) {
+      setError(e.message || 'Failed to fetch')
+    } finally {
+      setLoading(false)
     }
-  }, []);
+  }
 
-  // Track geolocation to decide when user is near origin
-  useEffect(() => {
-    if (!navigator.geolocation || !origin) return;
+  function startPolling() { stopPolling(); timerRef.current = setInterval(refresh, POLL_INTERVAL_MS) }
+  function stopPolling()  { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null } }
 
-    const id = navigator.geolocation.watchPosition(
+  function vibrate(pattern) { try { navigator.vibrate?.(pattern) } catch {} }
+  function showToast(msg, ms=1500) {
+    setToast(msg)
+    setFlash(true)
+    setTimeout(() => setFlash(false), Math.min(ms, 800))
+    setTimeout(() => setToast(null), ms)
+  }
+
+  async function notify(statusNow) {
+    if (lastAnnouncedRef.current === statusNow) return
+    lastAnnouncedRef.current = statusNow
+    try { await buzz(statusNow) } catch {}
+    const phrase =
+      statusNow === 'NEARBY'   ? 'Vehicle near your origin stop'
+    : statusNow === 'APPROACH' ? 'Approaching destination'
+    : statusNow === 'STOP'     ? 'Arrived: stop now'
+    : 'Idle'
+    showToast(phrase, 1800)
+    if (statusNow === 'NEARBY')   vibrate([200, 80, 200])
+    if (statusNow === 'APPROACH') vibrate([300, 80, 300])
+    if (statusNow === 'STOP')     vibrate([500, 120, 500])
+  }
+
+  useEffect(() => { if (guidanceOn) notify(status) }, [status, guidanceOn])
+  useEffect(() => { refresh(); startPolling(); return stopPolling }, [originStop, destStop])
+
+  function toggleGuidance() {
+    const next = !guidanceOn
+    setGuidanceOn(next)
+    if (!next) lastAnnouncedRef.current = null
+  }
+
+  function findNearbyFor(which) {
+    if (!navigator.geolocation) { setToast('Geolocation not available'); return }
+    setLocBusy(true)
+    navigator.geolocation.getCurrentPosition(
       (pos) => {
-        const { latitude, longitude } = pos.coords;
-        // TODO: compare (latitude, longitude) with origin.lat/lon
-        setNearOrigin(true); // for now always true
+        const { latitude, longitude } = pos.coords
+        const list = buildNearbyList(latitude, longitude)
+        if (which === 'origin') setNearbyOrigin(list)
+        else setNearbyDest(list)
+        setToast('Nearby stops updated')
+        setLocBusy(false)
       },
-      () => {},
-      { enableHighAccuracy: true, maximumAge: 5000 }
-    );
-
-    return () => navigator.geolocation.clearWatch(id);
-  }, [origin]);
-
-  const pickNearby = async () => {
-    const r = await stopsNear(42.349, -71.097, 2000);
-    setOrigin(r.stops?.[0] || null);
-  };
-
-  const searchDest = async (q) => {
-    const r = await stopsSearch(q);
-    setDest(r.stops?.[0] || null);
-  };
-
-  const start = async () => {
-    if (!origin || !dest) return;
-    const s = await createSession(origin.stop_id, dest.stop_id, "B");
-    setSessionId(s.session_id);
-    setState(s.state); // AWAITING_BOARD
-    const a = await getArrivals(origin.stop_id, "B");
-    setArrivals(a.arrivals || []);
-  };
-
-  const confirm = async (trip_id) => {
-    if (!sessionId) return;
-    const r = await boardTrip(sessionId, trip_id);
-    setState(r.state); // ONBOARD
-
-    if (poll.current) clearInterval(poll.current);
-    poll.current = setInterval(async () => {
-      const p = await getProgress(sessionId);
-      setState(p.state);
-      setEtaO(p.eta_to_origin_sec);
-      setEtaD(p.eta_to_destination_sec);
-      if (p.state === "ARRIVED") {
-        clearInterval(poll.current);
-      }
-    }, 3000);
-  };
+      () => { setToast('Location denied'); setLocBusy(false) },
+      { enableHighAccuracy: true, timeout: 7000 }
+    )
+  }
 
   return (
-    <div className="max-w-md mx-auto p-4 space-y-4">
-      <h2 className="text-xl font-bold">KeyRoute (demo flow)</h2>
+    <div className="app">
+      <header className="header">
+        <h1>KeyRoute</h1>
+        {/* Mode buttons, status pill, and idle badge removed */}
+      </header>
 
-      {/* Origin */}
-      <div className="space-y-1 p-3 border rounded-2xl">
-        <div className="text-sm opacity-70">Origin</div>
-        <button className="px-3 py-2 border rounded-xl" onClick={pickNearby}>
-          Use Nearby
-        </button>
-        <div className="text-sm">{origin ? origin.name : "Not selected"}</div>
-      </div>
+      {/* Optional visual flash when notifying */}
+      {flash && <div className={`flash flash-${status.toLowerCase()}`} aria-hidden="true" />}
 
-      {/* Destination */}
-      <div className="space-y-1 p-3 border rounded-2xl">
-        <div className="text-sm opacity-70">Destination</div>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            const q = e.target.q.value;
-            searchDest(q);
-          }}
-        >
-          <input
-            name="q"
-            className="px-3 py-2 border rounded-xl w-full"
-            placeholder="Search stop (e.g., Park Street)"
-          />
-        </form>
-        <div className="text-sm">{dest ? dest.name : "Not selected"}</div>
-      </div>
+      <section className="grid">
+        <div className="card">
+          <h2>Stops</h2>
 
-      {/* Start */}
-      <button
-        className="w-full py-3 rounded-2xl bg-black text-white disabled:opacity-40"
-        disabled={!origin || !dest}
-        onClick={start}
-      >
-        Start
-      </button>
-
-      {/* Arrivals + Confirm boarding */}
-      {state === "AWAITING_BOARD" && (
-        <div className="space-y-2 p-3 border rounded-2xl">
-          <div className="font-semibold">Upcoming trains</div>
-
-          {nearOrigin ? (
-            arrivals.map((a) => (
-              <div
-                key={a.trip_id}
-                className="flex items-center justify-between p-2 border rounded-xl"
+          <div className="row">
+            <label>Origin Stop</label>
+            <input value={originStop} onChange={e=>setOriginStop(e.target.value)} aria-label="Origin Stop ID" />
+          </div>
+          <div className="row">
+            <button onClick={()=>findNearbyFor('origin')} disabled={locBusy}>
+              {locBusy ? 'Locating…' : 'Find nearby (Origin)'}
+            </button>
+            {nearbyOrigin.length > 0 && (
+              <select
+                onChange={(e)=> setOriginStop(e.target.value)}
+                value={originStop}
+                aria-label="Nearby origin stops"
               >
-                <div>
-                  <div className="font-medium">{a.headsign}</div>
-                  <div className="text-sm opacity-70">
-                    To origin: {fmt(a.eta_sec)}
-                  </div>
-                  <div className="text-xs opacity-60">
-                    Departs {asClock(a.dep_epoch)}
-                  </div>
-                </div>
-                <button
-                  className="px-3 py-2 rounded-xl bg-black text-white"
-                  onClick={() => confirm(a.trip_id)}
-                >
-                  Confirm Boarding
-                </button>
-              </div>
-            ))
-          ) : (
-            <div className="text-sm opacity-70">
-              Get closer to your origin stop to confirm boarding.
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Live ETAs panel */}
-      {sessionId && (
-        <div className="space-y-2 p-3 border rounded-2xl sticky bottom-4 bg-white/90 backdrop-blur">
-          <div className="text-sm opacity-70">Status</div>
-          <div className="text-lg font-semibold">
-            {state.replaceAll("_", " ")}
+                {nearbyOrigin.map(s=>(
+                  <option key={s.id} value={s.id}>
+                    {s.name} — {s.dMiles.toFixed(2)} mi
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div className="p-2 border rounded-xl">
-              <div className="text-xs opacity-70">To Origin</div>
-              <div>{fmt(etaO)}</div>
-            </div>
-            <div className="p-2 border rounded-xl">
-              <div className="text-xs opacity-70">To Destination</div>
-              <div>{fmt(etaD)}</div>
-            </div>
+
+          <div className="row" style={{marginTop:12}}>
+            <label>Destination Stop</label>
+            <input value={destStop} onChange={e=>setDestStop(e.target.value)} aria-label="Destination Stop ID" />
+          </div>
+          <div className="row">
+            <button onClick={()=>findNearbyFor('dest')} disabled={locBusy}>
+              {locBusy ? 'Locating…' : 'Find nearby (Destination)'}
+            </button>
+            {nearbyDest.length > 0 && (
+              <select
+                onChange={(e)=> setDestStop(e.target.value)}
+                value={destStop}
+                aria-label="Nearby destination stops"
+              >
+                {nearbyDest.map(s=>(
+                  <option key={s.id} value={s.id}>
+                    {s.name} — {s.dMiles.toFixed(2)} mi
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
         </div>
-      )}
 
-      <div className="h-16" />
+        <div className="card">
+          <h2>ETAs</h2>
+          <p><b>Origin ETA:</b> {prettySeconds(originEta)}</p>
+          <p><b>Destination ETA:</b> {prettySeconds(destEta)}</p>
+          <p className="muted">{lastUpdated ? `Last updated: ${lastUpdated.toLocaleTimeString()}` : '—'}</p>
+        </div>
+      </section>
+
+      <section className="actions">
+        <button onClick={refresh} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh now'}</button>
+        <button onClick={()=>{startPolling(); setToast('Auto-refresh on')}}>Start auto-refresh</button>
+        <button onClick={()=>{stopPolling(); setToast('Auto-refresh off')}}>Stop auto-refresh</button>
+
+        <button className={guidanceOn ? 'primary' : ''} onClick={toggleGuidance}>
+          {guidanceOn ? 'Stop Guidance' : 'Start Guidance'}
+        </button>
+
+        {/* Removed: Ping backend + Backend status + Developer buzz tests */}
+      </section>
+
+      {toast && <div role="status" aria-live="assertive" className="toast">{toast}</div>}
+      <div aria-live="assertive" className="sr-only">{guidanceOn ? `Status: ${status}` : 'Guidance off'}</div>
+      {error && <p className="error">Error: {error}</p>}
+      {/* Removed: bottom KeyRoute demo flow panel */}
     </div>
-  );
+  )
 }
+
+console.log("API base:", import.meta.env.VITE_API_BASE);
